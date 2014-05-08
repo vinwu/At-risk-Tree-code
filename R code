@@ -1,0 +1,178 @@
+
+require(RODBC)
+DW <- odbcConnect("MozartVW")
+
+gSaveLocation <- "C:/Projects/22 - CRM Tree/"
+#gTable_Name<-"p_cia_t.ao_spanx_users_final"
+gTable_Name<-" P_CIA_T.yimo_atRisk_coupon"
+
+sample_df <- sqlQuery(DW, paste("select top 1 * from ", gTable_Name, sep=""))
+
+
+cols <- colnames(sample_df)
+cols <- data.frame(cols[c(4:6,8,10:14,17:20,23:29,31:32,34:35,37:38,40:51)])
+cols$col_type <- "int"
+cols[c(6:12),2] <- "str"
+cols$val_type <- "fac"
+cols[c(4,13:21:26),3] <- "ind"
+cols[,1] <- as.character(cols[,1])
+cols[,2] <- as.character(cols[,2])
+cols[,3] <- as.character(cols[,3])
+cols
+
+#The following builds the levels for variables
+
+gSQLData <- data.frame("var_name","value","notvalue")
+colnames(gSQLData) <- c("var","val","notval")
+gSQLData$var <- as.character(gSQLData$var)
+gSQLData$val <- as.character(gSQLData$val)
+gSQLData$notval <- as.character(gSQLData$notval)
+
+sink(paste(gSaveLocation,"log.txt",sep=""))
+
+for(ctr1 in 1:nrow(cols))
+{
+  DW <- odbcConnect("MozartVW")
+  if (cols[ctr1,2] == "int" & cols[ctr1,3] == "fac")
+  {
+    val_levels <- sqlQuery(DW, paste("select qt,min(", cols[ctr1,1], ") as ", cols[ctr1,1], " from (select quantile(10,", cols[ctr1,1], ") qt, ", cols[ctr1,1], " from ", gTable_Name, " where ",cols[ctr1,1],">0) a group by 1 order by 1", sep=""))
+    val_levels <- val_levels[!duplicated(val_levels[1:nrow(val_levels),2]),]
+    for(ctr2 in 1:(nrow(val_levels)+1))
+    {
+      if(ctr2 == 1)
+      {
+        gSQLData <- rbind(gSQLData,c(cols[ctr1,1],paste(cols[ctr1,1],"<=",val_levels[ctr2,2],sep=""),paste(cols[ctr1,1],">",val_levels[ctr2,2],sep="")))
+      } else if(ctr2 == nrow(val_levels)+1) {
+        gSQLData <- rbind(gSQLData,c(cols[ctr1,1],paste(cols[ctr1,1],">",val_levels[ctr2-1,2],sep=""),paste(cols[ctr1,1],"<=",val_levels[ctr2-1,2],sep="")))
+      } else {
+        gSQLData <- rbind(gSQLData,c(cols[ctr1,1],paste(cols[ctr1,1],">",val_levels[ctr2-1,2], " and ", cols[ctr1,1],"<=",val_levels[ctr2,2],sep=""),paste("(", cols[ctr1,1],"<=",val_levels[ctr2-1,2], " or ", cols[ctr1,1],">",val_levels[ctr2,2],")",sep="")))
+      }
+    }
+  } else if (cols[ctr1,2] == "str") {
+    val_levels <- sqlQuery(DW, paste("select ", cols[ctr1,1], " from ", gTable_Name, " group by 1 order by 1", sep=""))
+    if(nrow(val_levels) <= 2)
+    {
+      gSQLData <- rbind(gSQLData,c(cols[ctr1,1],paste(cols[ctr1,1],"='",val_levels[1,1], "'",sep=""),paste(cols[ctr1,1],"<>'",val_levels[1,1], "'",sep="")))
+    } else {
+      for(ctr2 in 1:(nrow(val_levels)))
+      {
+        gSQLData <- rbind(gSQLData,c(cols[ctr1,1],paste(cols[ctr1,1],"='",val_levels[ctr2,1], "'",sep=""),paste(cols[ctr1,1],"<>'",val_levels[ctr2,1], "'",sep="")))
+      }
+    }
+  } else if (cols[ctr1,2] == "int" & cols[ctr1,3] == "ind") {
+    val_levels <- sqlQuery(DW, paste("select ", cols[ctr1,1], " from ", gTable_Name, " group by 1 order by 1", sep=""))
+    if(nrow(val_levels) <= 2)
+    {
+      gSQLData <- rbind(gSQLData,c(cols[ctr1,1],paste(cols[ctr1,1],"=",val_levels[1,1],sep=""),paste(cols[ctr1,1],"<>",val_levels[1,1],sep="")))
+    } else {
+      for(ctr2 in 1:(nrow(val_levels)))
+      {
+        gSQLData <- rbind(gSQLData,c(cols[ctr1,1],paste(cols[ctr1,1],"=",val_levels[ctr2,1],sep=""),paste(cols[ctr1,1],"<>",val_levels[ctr2,1],sep="")))
+      }
+    }
+  }
+  odbcClose(DW)
+}
+
+gSQLData<-gSQLData[2:nrow(gSQLData),]
+gSQLData<-gSQLData[!duplicated(gSQLData[1:nrow(gSQLData),2]),]
+rownames(gSQLData) <- 1:nrow(gSQLData)
+print(gSQLData)
+length(gSQLData[,2])
+sink(NULL)
+
+#DW <- odbcConnect("Vivaldi",uid="yimo",pwd="Nyanya00")
+#sqlQuery(DW, paste("alter table ", gTable_Name, " add tar decimal(18,4)", sep=""))
+#sqlQuery(DW, paste("update ", gTable_Name, " set tar = 100 * tot_trnx", sep=""))
+#odbcClose(DW)
+
+queryStr <- paste("
+                  select
+                  chnl_id",sep="")
+
+
+for(ctr3 in 1:nrow(gSQLData))
+{
+  queryStr <- paste(queryStr,"
+                    ,sum(case when ", gSQLData[ctr3,2], " then 1 else 0 end) as var", 1000+ctr3, "_ct
+                    ,avg(case when ", gSQLData[ctr3,2], " then targrt_GMB else null end) as var", 1000+ctr3, "_avg
+
+                    ",sep="")
+}
+queryStr
+
+queryStr <- paste(queryStr,"
+                  ,count(*) as num_rows
+                  ,sum(cast(targrt_GMB as decimal(18,4))) as tot_tar
+                  from
+                  ", gTable_Name, "
+                  where sample_div = 'DEV' and
+                  ",sep="")
+rules_so_far<-" 1=1 "
+##tree
+
+buildtreeX2.4 <- function(queryStr,gSQLData,test_leaf_threshold,ctrl_leaf_threshold,rule_list=list(),gain,rules_so_far='1=1')
+{
+  DW <- odbcConnect("MozartVW")
+  temp_df <- sqlQuery(DW, paste(queryStr,rules_so_far," group by 1 order by 1", sep=""))
+  odbcClose(DW)
+  
+  if(nrow(temp_df) == 2) {
+    temp_dft <- data.frame(t(temp_df))
+    temp_dft <- temp_dft[2:nrow(temp_dft),]
+    num_ctrl <- as.numeric(as.character(temp_dft[nrow(temp_dft)-1,2]))
+    num_test <- as.numeric(as.character(temp_dft[nrow(temp_dft)-1,1]))
+    tot_ctrl <- as.numeric(as.character(temp_dft[nrow(temp_dft),2]))
+    tot_test <- as.numeric(as.character(temp_dft[nrow(temp_dft),1]))
+    temp_dft <- temp_dft[1:(nrow(temp_dft)-2),]
+    
+    temp_dftr <- cbind(temp_dft[seq(1,nrow(temp_dft), by=2),],temp_dft[seq(2,nrow(temp_dft), by=2),],c(1:(nrow(temp_dft)/2)))
+    colnames(temp_dftr) <- c("ct_ctrl","ct_test","avg_ctrl","avg_test","index")
+    temp_dftr$ct_ctrl<-as.numeric(as.character(temp_dftr$ct_ctrl))
+    temp_dftr$ct_test<-as.numeric(as.character(temp_dftr$ct_test))
+    temp_dftr$avg_test<-as.numeric(as.character(temp_dftr$avg_test))
+    temp_dftr$avg_ctrl<-as.numeric(as.character(temp_dftr$avg_ctrl))
+    temp_dftr$gain <- temp_dftr$avg_test - temp_dftr$avg_ctrl
+    temp_dftr$notgain <- ((tot_test - (temp_dftr$avg_test * temp_dftr$ct_test)) / (num_test + 100 -  temp_dftr$ct_test)) -
+      ((tot_ctrl - (temp_dftr$avg_ctrl * temp_dftr$ct_ctrl)) / (num_ctrl + 100 -  temp_dftr$ct_ctrl))
+    temp_dftr<-temp_dftr[temp_dftr$ct_ctrl > ctrl_leaf_threshold & (num_ctrl -  temp_dftr$ct_ctrl) > ctrl_leaf_threshold & 
+                           temp_dftr$ct_test > test_leaf_threshold & (num_test -  temp_dftr$ct_test) > test_leaf_threshold,]
+    temp_dftr<-temp_dftr[temp_dftr$ct_ctrl > 0 & temp_dftr$ct_test>0,]
+    
+    if(length(rule_list) > 0) {
+      for(ctr1 in 1:length(rule_list)) {
+        if (nrow(temp_dftr) > 0) {
+          temp_dftr<-temp_dftr[!temp_dftr$index == rule_list[[ctr1]],]
+        }
+      }
+    }
+    if (nrow(temp_dftr) == 0) {
+      print(paste("update ", gTable_Name, " set score=", gain, " where ", rules_so_far, ";", sep=""))
+    } else {
+      temp_left <- temp_dftr[order(temp_dftr$gain, decreasing=TRUE),][1,c("index","gain","notgain")]
+      temp_right <- temp_dftr[order(temp_dftr$notgain, decreasing=TRUE),][1,c("index","gain","notgain")]
+      if (temp_left[1,"gain"] >= temp_right[1,"notgain"]) {
+        temp_choice <- temp_left
+      } else {
+        temp_choice <- temp_right
+      }
+      
+      rule_list <- append(rule_list, temp_choice[1,"index"])
+      #      print(paste("Calling buildtree using ", rules_so_far, " and ", gSQLData[temp_choice[1,"index"],"val"], sep=""))
+      buildtreeX2.4(queryStr,gSQLData,test_leaf_threshold,ctrl_leaf_threshold,rule_list=rule_list,temp_choice[1,"gain"],rules_so_far=paste(rules_so_far, " and ", gSQLData[temp_choice[1,"index"],"val"], sep=""))
+      #      print(paste("Calling buildtree using ", rules_so_far, " and ", gSQLData[temp_choice[1,"index"],"notval"], sep=""))
+      buildtreeX2.4(queryStr,gSQLData,test_leaf_threshold,ctrl_leaf_threshold,rule_list=rule_list,temp_choice[1,"notgain"],rules_so_far=paste(rules_so_far, " and ", gSQLData[temp_choice[1,"index"],"notval"], sep=""))
+    }
+  }
+}
+
+DW <- odbcConnect("MozartVW")
+smp_count<-sqlQuery(DW, paste("sel chnl_id,count(*) as num_ct from ", gTable_Name," where sample_div = 'DEV' ", " group by 1 order by 1", sep=""))
+test_leaf_threshold<-as.numeric(smp_count[smp_count$CHNL_ID ==1,2])
+ctrl_leaf_threshold<-as.numeric(smp_count[smp_count$CHNL_ID ==4,2]) 
+
+odbcClose(DW)
+
+sink(paste(gSaveLocation,"tree.txt",sep=""))
+buildtreeX2.4(queryStr,gSQLData,test_leaf_threshold/200,ctrl_leaf_threshold/200,0,rules_so_far='1=1')
+sink(NULL)
